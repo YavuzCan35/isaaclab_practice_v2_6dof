@@ -1,0 +1,13 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	print_latest_biped_v2_play_cmd.bat
+	source/isaaclab_tasks/isaaclab_tasks/manager_based/biped_v2_6dof/
+
+nothing added to commit but untracked files present (use "git add" to track) 
+
+
+--- git diff ---

@@ -1,0 +1,153 @@
+BIPED300125 LOCOMOTION TASK PLAN (NO CODE CHANGES APPLIED)
+Date: 2026-01-30
+
+Goal
+- Replace the auto-generated cartpole task with a manager-based locomotion (velocity-tracking) task for your biped USD.
+- Use the reward terms from the referenced video (timestamp ~5:20). This file tells you what to change, where, and why.
+
+Inputs (confirmed)
+- USD: C:\Users\firstuser\Downloads\biped_y4\biped_version300125_1.usd
+- URDF (for reference): C:\Users\firstuser\Downloads\biped_y4\bipad_walker_final_y4_description\urdf\bipad_walker_final_y4.urdf
+- Current task: C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\biped300125_env_cfg.py
+
+IMPORTANT: Verify names in USD
+- The URDF joints are named "Revolute 1..4" and links include base_link, left_upper_1, left_lower_1, right_upper_1, right_lower_1.
+- Isaac Sim usually converts spaces to underscores in USD (e.g., Revolute_1). Confirm actual joint/body names by opening the USD in Isaac Sim.
+- These names are required for action lists, contact sensors, and termination rules.
+
+-------------------------------------------------------------------------------
+1) Create a robot asset config for the USD
+Where
+- Create new file:
+  C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\biped300125_asset_cfg.py
+What to add
+- Define an ArticulationCfg that loads the USD and enables contact sensors.
+- Add a reasonable initial pose and joint defaults for standing.
+- Add actuators (ImplicitActuatorCfg) for the 4 revolute joints.
+Why
+- Locomotion tasks need a robot config to spawn the USD and control joints with PD drives.
+Suggested skeleton (fill joint names after USD inspection)
+- spawn = sim_utils.UsdFileCfg(usd_path=..., activate_contact_sensors=True, rigid_props=..., articulation_props=...)
+- init_state.pos = (0.0, 0.0, <base_height>)  # set so feet just clear the ground
+- init_state.joint_pos = {"Revolute_1": 0.0, "Revolute_2": 0.0, "Revolute_3": 0.0, "Revolute_4": 0.0}
+- actuators = {"legs": ImplicitActuatorCfg(joint_names_expr=[...], effort_limit_sim=..., stiffness=..., damping=...)}
+Notes
+- Start with modest stiffness/damping (e.g., 50-150 stiffness, 1-5 damping) and tune later.
+
+-------------------------------------------------------------------------------
+2) Replace cartpole config with locomotion velocity task
+Where
+- Edit:
+  C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\biped300125_env_cfg.py
+What to change
+A) Imports
+- Replace cartpole imports with locomotion velocity base:
+  from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg, RewardsCfg
+  import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
+- Import your new robot cfg:
+  from .biped300125_asset_cfg import BIPED300125_CFG
+Why
+- This gives you standard locomotion commands, observations, events, and reward helpers.
+
+B) Create a rewards subclass for this biped
+- Define Biped300125RewardsCfg(RewardsCfg)
+- Add/override reward terms per the video (see section 3).
+Why
+- Keep the reward logic clean and centralized like other locomotion tasks (Cassie, G1).
+
+C) Create a locomotion env config class
+- Define Biped300125RoughEnvCfg(LocomotionVelocityRoughEnvCfg)
+- In __post_init__:
+  - scene.robot = BIPED300125_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+  - scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base_link" (or your actual base link)
+  - actions.joint_pos.joint_names = [<4 joint names>]
+  - events.reset_robot_joints.position_range = (1.0, 1.0)  # if you want fixed init pose
+  - terminations.base_contact sensor body names = ["base_link"] (or actual base)
+  - contact sensor body names for feet = ["left_lower_1", "right_lower_1"] (or actual foot links)
+Why
+- This wires your robot into the standard locomotion pipeline.
+
+D) Flat ground option (recommended for first training)
+- If you want a simple flat plane:
+  - scene.terrain.terrain_type = "plane"
+  - scene.terrain.terrain_generator = None
+  - scene.height_scanner = None
+  - observations.policy.height_scan = None
+  - curriculum.terrain_levels = None
+Why
+- Simplifies early training and removes terrain complexity.
+
+-------------------------------------------------------------------------------
+3) Rewards from the video (place here)
+Where
+- In Biped300125RewardsCfg inside biped300125_env_cfg.py
+What to add/adjust
+- Map each reward from the video to an mdp function. Example mapping (edit to match the video):
+  - velocity tracking: mdp.track_lin_vel_xy_yaw_frame_exp, mdp.track_ang_vel_z_world_exp
+  - orientation penalty: mdp.flat_orientation_l2
+  - torque penalty: mdp.joint_torques_l2
+  - joint acceleration penalty: mdp.joint_acc_l2
+  - action rate penalty: mdp.action_rate_l2
+  - foot air time (biped): mdp.feet_air_time_positive_biped
+  - foot slip penalty: mdp.feet_slide
+  - undesired contacts: mdp.undesired_contacts (e.g., thighs/base)
+  - termination penalty: mdp.is_terminated
+Why
+- These are the standard locomotion reward building blocks and closely match common biped reward sets.
+NOTE
+- Replace the placeholder list above with the exact reward terms and weights from your video.
+- If the video uses a custom reward not in locomotion.velocity.mdp, add it in:
+  C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\mdp\rewards.py
+  and import it in biped300125_env_cfg.py.
+
+-------------------------------------------------------------------------------
+4) Terminations
+Where
+- biped300125_env_cfg.py (TerminationCfg or in __post_init__)
+What to add
+- time_out (already in base)
+- base contact illegal: mdp.illegal_contact with base link
+- optional: terminate if root height falls below a threshold (if needed)
+Why
+- Prevents training on fallen states and stabilizes learning.
+
+-------------------------------------------------------------------------------
+5) Observations and actions
+Where
+- biped300125_env_cfg.py
+What to change
+- Keep policy obs from LocomotionVelocityRoughEnvCfg (base vel, gravity, joint pos/vel, last action).
+- If you do not use height scan, remove it as noted in section 2D.
+- Actions: use JointPositionActionCfg for the 4 joints.
+Why
+- Standard observation/action set for velocity-tracking locomotion.
+
+-------------------------------------------------------------------------------
+6) Update task registration (if class name changes)
+Where
+- C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\__init__.py
+What to change
+- Make sure env_cfg_entry_point points to your new class, e.g.:
+  "env_cfg_entry_point": "...biped300125_env_cfg:Biped300125RoughEnvCfg"
+Why
+- Ensures the gym task uses the locomotion config you just defined.
+
+-------------------------------------------------------------------------------
+7) Agent config sanity (optional but recommended)
+Where
+- C:\isaaclab3\source\isaaclab_tasks\isaaclab_tasks\manager_based\biped300125\agents\*
+What to check
+- experiment_name, max_iterations, and logging directories.
+- No action/obs sizes need to be hard-coded; these are inferred from the env.
+Why
+- Keeps logs organized and avoids mismatched training settings.
+
+-------------------------------------------------------------------------------
+8) Validation checklist (after edits)
+- Spawn only: run play script and verify joint names and contacts.
+- Check that feet contact the ground and base link is above ground.
+- If the robot explodes or jitters, reduce joint stiffness/damping.
+- If the robot falls instantly, raise init base height or adjust joint defaults.
+
+-------------------------------------------------------------------------------
+If you want me to fill in the exact reward list and weights from the video, paste them here or share the list.
